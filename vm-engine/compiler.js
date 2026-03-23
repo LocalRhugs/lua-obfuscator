@@ -13,6 +13,7 @@ const OPCODES = {
   CALL: 0x40, RETURN: 0x41, CLOSURE: 0x42,
   POP: 0x50, DUP: 0x51,
   FOR_PREP: 0x60, FOR_LOOP: 0x61,
+  GET_VARARG: 0x70,
   HALT: 0xFF,
 };
 
@@ -33,7 +34,12 @@ class FunctionPrototype {
   
   emitOp(op) { return this.emit(op); }
   emitOp16(op, val) { const pos = this.emit(op); this.emit16(val); return pos; }
-  emitCall(nargs, nrets) { this.emit(OPCODES.CALL); this.emit(nargs); this.emit(nrets); }
+  emitCall(nargs, nrets, expand = 0) { 
+    this.emit(OPCODES.CALL); 
+    this.emit(nargs); 
+    this.emit(nrets); 
+    this.emit(expand); 
+  }
 
   addConstant(value) {
     const key = typeof value === 'string' ? `s:${value}` : `n:${value}`;
@@ -135,27 +141,56 @@ class Compiler {
   compileLocal(func, node) {
     const vars = node.variables;
     const inits = node.init || [];
-    for (let i = 0; i < vars.length; i++) {
-      if (i < inits.length) {
-        this.compileExpression(func, inits[i]);
-      } else {
-        func.emitOp(OPCODES.LOAD_NIL);
+    
+    // Check if the last initialiser is a call/vararg that can expand
+    const lastInit = inits[inits.length - 1];
+    const canExpand = lastInit && (lastInit.type === 'CallExpression' || lastInit.type === 'VarargLiteral');
+
+    if (canExpand && vars.length > inits.length) {
+      // f.e. local a, b, c = 1, f()
+      for (let i = 0; i < inits.length - 1; i++) {
+        this.compileExpression(func, inits[i], 1);
+        func.emitOp16(OPCODES.SET_LOCAL, func.addLocal(vars[i].name));
       }
-      const slot = func.addLocal(vars[i].name);
-      func.emitOp16(OPCODES.SET_LOCAL, slot);
+      // Expand the last one
+      const nrets = vars.length - (inits.length - 1);
+      this.compileExpression(func, lastInit, nrets);
+      for (let i = vars.length - 1; i >= inits.length - 1; i--) {
+        func.emitOp16(OPCODES.SET_LOCAL, func.addLocal(vars[i].name));
+      }
+    } else {
+      // Standard 1:1 or N:M
+      for (let i = 0; i < vars.length; i++) {
+        if (i < inits.length) {
+          this.compileExpression(func, inits[i], 1);
+        } else {
+          func.emitOp(OPCODES.LOAD_NIL);
+        }
+        func.emitOp16(OPCODES.SET_LOCAL, func.addLocal(vars[i].name));
+      }
     }
   }
 
   compileAssignment(func, node) {
     const vars = node.variables;
     const inits = node.init || [];
-    for (let i = 0; i < vars.length; i++) {
-      if (i < inits.length) {
-        this.compileExpression(func, inits[i]);
-      } else {
-        func.emitOp(OPCODES.LOAD_NIL);
+    
+    // Check for expansion
+    const lastInit = inits[inits.length - 1];
+    const canExpand = lastInit && (lastInit.type === 'CallExpression' || lastInit.type === 'VarargLiteral');
+
+    if (canExpand && vars.length > inits.length) {
+       for (let i = 0; i < inits.length - 1; i++) {
+         this.compileExpression(func, inits[i], 1);
+       }
+       this.compileExpression(func, lastInit, vars.length - (inits.length - 1));
+    } else {
+      for (let i = 0; i < vars.length; i++) {
+        if (i < inits.length) this.compileExpression(func, inits[i], 1);
+        else func.emitOp(OPCODES.LOAD_NIL);
       }
     }
+
     for (let i = vars.length - 1; i >= 0; i--) {
       const target = vars[i];
       if (target.type === 'Identifier') {
@@ -163,6 +198,13 @@ class Compiler {
         if (slot >= 0) func.emitOp16(OPCODES.SET_LOCAL, slot);
         else func.emitOp16(OPCODES.SET_GLOBAL, func.addConstant(target.name));
       } else if (target.type === 'MemberExpression') {
+        const tmpT = func.nextSlot++; // table
+        const tmpK = func.nextSlot++; // key (not really needed but for stack consistency)
+        // This is complex for a simple stack VM. Let's use a simpler approach.
+        // Stack contains [..., val]
+        // We need to set table[key] = val
+        // The original compiler was using a very simple but potentially broken swap.
+        // Let's stick to the simple one but make it safer.
         const tmpV = func.nextSlot++;
         func.emitOp16(OPCODES.SET_LOCAL, tmpV);
         this.compileExpression(func, target.base);
@@ -381,9 +423,20 @@ class Compiler {
       func.emit(OPCODES.RETURN);
       func.emit(1);
     } else {
-      for (const a of args) this.compileExpression(func, a);
-      func.emit(OPCODES.RETURN);
-      func.emit(args.length);
+      for (let i = 0; i < args.length - 1; i++) {
+        this.compileExpression(func, args[i], 1);
+      }
+      const last = args[args.length - 1];
+      const expandable = last.type === 'CallExpression' || last.type === 'VarargLiteral';
+      if (expandable) {
+        this.compileExpression(func, last, 0); // 0 means "all available"
+        func.emit(OPCODES.RETURN);
+        func.emit(0); // 0 means "variable results on stack"
+      } else {
+        this.compileExpression(func, last, 1);
+        func.emit(OPCODES.RETURN);
+        func.emit(args.length);
+      }
     }
   }
 
@@ -437,9 +490,8 @@ class Compiler {
         func.emitOp16(OPCODES.CLOSURE, fi);
         return;
       case 'VarargLiteral':
-        const vs = func.resolveLocal('...');
-        if (vs >= 0) func.emitOp16(OPCODES.GET_LOCAL, vs);
-        else func.emitOp(OPCODES.LOAD_NIL);
+        func.emitOp(OPCODES.GET_VARARG);
+        func.emit(nrets);
         return;
     }
   }
@@ -462,7 +514,7 @@ class Compiler {
 
   compileCall(func, node, nrets) {
     if (node.base.type === 'MemberExpression' && node.base.indexer === ':') {
-      this.compileExpression(func, node.base.base);
+      this.compileExpression(func, node.base.base, 1);
       func.emitOp(OPCODES.DUP);
       func.emitOp16(OPCODES.LOAD_CONST, func.addConstant(node.base.identifier.name));
       func.emitOp(OPCODES.GET_TABLE);
@@ -471,13 +523,30 @@ class Compiler {
       func.emitOp16(OPCODES.SET_LOCAL, ts);
       func.emitOp16(OPCODES.GET_LOCAL, tf);
       func.emitOp16(OPCODES.GET_LOCAL, ts);
-      for (const a of node.arguments) this.compileExpression(func, a);
-      func.emitCall(node.arguments.length + 1, nrets);
+      
+      const args = node.arguments;
+      for (let i = 0; i < args.length - 1; i++) this.compileExpression(func, args[i], 1);
+      if (args.length > 0) {
+        const last = args[args.length - 1];
+        const expandable = last.type === 'CallExpression' || last.type === 'VarargLiteral';
+        this.compileExpression(func, last, expandable ? 0 : 1);
+        func.emitCall(args.length + 1, nrets, expandable ? 1 : 0);
+      } else {
+        func.emitCall(1, nrets, 0);
+      }
       return;
     }
-    this.compileExpression(func, node.base);
-    for (const a of node.arguments) this.compileExpression(func, a);
-    func.emitCall(node.arguments.length, nrets);
+    this.compileExpression(func, node.base, 1);
+    const args = node.arguments;
+    for (let i = 0; i < args.length - 1; i++) this.compileExpression(func, args[i], 1);
+    if (args.length > 0) {
+      const last = args[args.length - 1];
+      const expandable = last.type === 'CallExpression' || last.type === 'VarargLiteral';
+      this.compileExpression(func, last, expandable ? 0 : 1);
+      func.emitCall(args.length, nrets, expandable ? 1 : 0);
+    } else {
+      func.emitCall(0, nrets, 0);
+    }
   }
 
   compileTable(func, node) {

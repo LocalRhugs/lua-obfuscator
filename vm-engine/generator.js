@@ -52,10 +52,11 @@ function remapBytecode(funcProto, originalOpcodes, newOpcodes) {
       case 'JMP': case 'JMP_FALSE': case 'JMP_TRUE':
       case 'SET_LIST':
         pc += 3; break;
-      case 'CALL': pc += 3; break;
+      case 'CALL': pc += 4; break;
       case 'RETURN': pc += 2; break;
       case 'FOR_PREP': case 'FOR_LOOP':
         pc += 5; break;
+      case 'GET_VARARG': pc += 2; break;
       default: pc += 1; break;
     }
   }
@@ -190,19 +191,29 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`local function ${V.peek}() return ${V.stack}[${V.sp}] end`);
   lines.push('');
 
-  // Fixed Globals: Pass through everything else to _G to support Roblox Instances and their methods
-  lines.push(`local ${V.globals}=setmetatable({`);
+  // Improved Globals: Proxy to _G but prioritize VM globals.
+  // We also add a basic getfenv/setfenv simulation for Roblox scripts.
+  lines.push(`local ${V.globals}`);
+  lines.push(`${V.globals} = setmetatable({`);
   const builtins = [
     'print','tostring','tonumber','type','error','assert','pcall','xpcall',
     'select','unpack','rawget','rawset','rawequal','rawlen',
     'setmetatable','getmetatable','next','pairs','ipairs',
     'string','table','math','io','os','coroutine','bit32','bit',
+    'getfenv', 'setfenv', '_G', '_VERSION', 'shared'
   ];
   for (const b of builtins) {
-    if (typeof global !== 'undefined' && global[b] === undefined) continue; // safety for non-standard envs
-    lines.push(`  ["${b}"]=${b},`);
+    if (b === 'getfenv') {
+        lines.push(`    ["getfenv"] = function(f) if f == 0 or f == 1 or f == nil then return ${V.globals} end return getfenv(f) end,`);
+    } else if (b === 'setfenv') {
+        lines.push(`    ["setfenv"] = function(f, t) if f == 1 or f == nil then return ${V.globals} end return setfenv(f, t) end,`);
+    } else if (b === '_G') {
+        lines.push(`    ["_G"] = ${V.globals},`);
+    } else {
+        lines.push(`    ["${b}"] = ${b},`);
+    }
   }
-  lines.push(`}, {__index=_G,__newindex=_G})`);
+  lines.push(`}, {__index = _G})`);
   lines.push('');
 
   const OP = {};
@@ -216,12 +227,17 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`  local ${V.consts}=${V.fn}.consts`);
   lines.push(`  local ${V.locals}={}`);
   lines.push(`  local ${V.pc}=1`);
-  lines.push(`  for ${V.i}=1,${V.fn}.nparams do ${V.locals}[${V.i}-1]=(${V.args} and ${V.args}[${V.i}]) end`);
-  lines.push('');
+  lines.push(`  local ${V.last_results} = {}`);
+  lines.push(`  local ${V.vargs} = {}`);
+  lines.push(`  if ${V.args} then`);
+  lines.push(`    for ${V.i}=1,${V.fn}.nparams do ${V.locals}[${V.i}-1]=${V.args}[${V.i}] end`);
+  lines.push(`    for ${V.i}=${V.fn}.nparams+1,#${V.args} do ${V.vargs}[#${V.vargs}+1]=${V.args}[${V.i}] end`);
+  lines.push(`  end`);
   lines.push(`  while ${V.pc}<=#${V.bc} do`);
   lines.push(`    local ${V.op}=${V.bc}[${V.pc}]`);
   lines.push(`    ${V.pc}=${V.pc}+1`);
   lines.push('');
+  // ... (rest of the opcodes)
 
   lines.push(`    if ${V.op}==${OP.LOAD_CONST} then`);
   lines.push(`      local ${V.idx}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
@@ -284,32 +300,46 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`      ${V.pc}=${V.pc}+2`);
   lines.push(`      if ${V.a} then ${V.pc}=${V.idx}+1 end`);
 
-  // Fixed CALL: Pass through non-VM functions directly to support Roblox method calls
+  // Finalized CALL: Now that CLOSURE returns a real function, we can simplify this.
+  // However, we still want to support the OLD style just in case, but prioritize the new one.
   lines.push(`    elseif ${V.op}==${OP.CALL} then`);
   lines.push(`      local ${V.nargs}=${V.bc}[${V.pc}]`);
   lines.push(`      local ${V.nrets}=${V.bc}[${V.pc}+1]`);
-  lines.push(`      ${V.pc}=${V.pc}+2`);
+  lines.push(`      local ${V.expand}=${V.bc}[${V.pc}+2]`);
+  lines.push(`      ${V.pc}=${V.pc}+3`);
   lines.push(`      local ${V.callArgs}={}`);
-  lines.push(`      for ${V.i}=${V.nargs},1,-1 do ${V.callArgs}[${V.i}]=${V.pop}() end`);
-  lines.push(`      local ${V.fn}=${V.pop}()`);
-  lines.push(`      if type(${V.fn})=="table" and ${V.fn}.__astra then`);
-  lines.push(`        local ${V.result}={${V.exec}(${V.fn}.__astra,${V.callArgs})}`);
-  lines.push(`        for ${V.i}=1,${V.nrets} do ${V.push}(${V.result}[${V.i}]) end`);
+  lines.push(`      if ${V.expand} == 1 then`);
+  lines.push(`          local ${V.extra} = ${V.last_results} or {}`);
+  lines.push(`          for ${V.i}=1,#${V.extra} do ${V.callArgs}[${V.nargs}+${V.i}-1] = ${V.extra}[${V.i}] end`);
+  lines.push(`          for ${V.i}=${V.nargs}-1,1,-1 do ${V.callArgs}[${V.i}]=${V.pop}() end`);
   lines.push(`      else`);
-  lines.push(`        local ${V.result}={${V.fn}((unpack or table.unpack)(${V.callArgs}))}`);
-  lines.push(`        for ${V.i}=1,${V.nrets} do ${V.push}(${V.result}[${V.i}]) end`);
+  lines.push(`          for ${V.i}=${V.nargs},1,-1 do ${V.callArgs}[${V.i}]=${V.pop}() end`);
+  lines.push(`      end`);
+  lines.push(`      local ${V.fn}=${V.pop}()`);
+  // If it's a VM function (captured idx), it will just be a real function that calls exec.
+  // If it's an external function, same.
+  lines.push(`      local ${V.result}={${V.fn}((unpack or table.unpack)(${V.callArgs}))}`);
+  lines.push(`      ${V.last_results} = ${V.result}`);
+  lines.push(`      if ${V.nrets} > 0 then`);
+  lines.push(`          for ${V.i}=1,${V.nrets} do ${V.push}(${V.result}[${V.i}]) end`);
   lines.push(`      end`);
 
   lines.push(`    elseif ${V.op}==${OP.RETURN} then`);
   lines.push(`      local ${V.nrets}=${V.bc}[${V.pc}]`);
   lines.push(`      ${V.pc}=${V.pc}+1`);
+  lines.push(`      if ${V.nrets} == 0 then`);
+  lines.push(`          return (unpack or table.unpack)(${V.last_results})`);
+  lines.push(`      end`);
   lines.push(`      local ${V.retVals}={}`);
   lines.push(`      for ${V.i}=${V.nrets},1,-1 do ${V.retVals}[${V.i}]=${V.pop}() end`);
   lines.push(`      return (unpack or table.unpack)(${V.retVals})`);
+
+  // Fixed CLOSURE: Return a real function that closes over the index and the VM executor.
   lines.push(`    elseif ${V.op}==${OP.CLOSURE} then`);
   lines.push(`      local ${V.idx}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
   lines.push(`      ${V.pc}=${V.pc}+2`);
-  lines.push(`      ${V.push}({__astra=${V.idx}+1})`);
+  lines.push(`      local ${V.shared_exec} = ${V.exec}`);
+  lines.push(`      ${V.push}(function(...) return ${V.shared_exec}(${V.idx}+1, {...}) end)`);
   lines.push(`    elseif ${V.op}==${OP.POP} then ${V.pop}()`);
   lines.push(`    elseif ${V.op}==${OP.DUP} then ${V.push}(${V.peek}())`);
   lines.push(`    elseif ${V.op}==${OP.SET_LIST} then ${V.pc}=${V.pc}+2`);
@@ -332,6 +362,14 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`      local ${V.limit}=${V.locals}[${V.varSlot}+1]`);
   lines.push(`      local ${V.step}=${V.locals}[${V.varSlot}+2]`);
   lines.push(`      if (${V.step}>0 and ${V.i}<=${V.limit}) or (${V.step}<0 and ${V.i}>=${V.limit}) then ${V.pc}=${V.idx}+1 end`);
+  lines.push(`    elseif ${V.op}==${OP.GET_VARARG} then`);
+  lines.push(`      local ${V.nrets}=${V.bc}[${V.pc}]`);
+  lines.push(`      ${V.pc}=${V.pc}+1`);
+  lines.push(`      if ${V.nrets} == 0 then`);
+  lines.push(`          ${V.last_results} = ${V.vargs}`);
+  lines.push(`      else`);
+  lines.push(`          for ${V.i}=1,${V.nrets} do ${V.push}(${V.vargs}[${V.i}] or nil) end`);
+  lines.push(`      end`);
   lines.push(`    elseif ${V.op}==${OP.HALT} then return`);
   lines.push(`    end`);
   lines.push(`  end`);
