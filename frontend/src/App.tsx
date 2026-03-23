@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { StreamLanguage } from '@codemirror/language';
 import { lua } from '@codemirror/legacy-modes/mode/lua';
-import { vscodeDark } from '@uiw/codemirror-theme-vscode';
+import { dracula } from '@uiw/codemirror-theme-dracula';
 import { useDropzone } from 'react-dropzone';
 import { 
   Zap, 
@@ -15,10 +15,7 @@ import {
   Loader2, 
   Github, 
   MessageSquare, 
-  Cpu, 
-  Maximize2, 
   ExternalLink,
-  Save,
   FileCode,
   Layout,
   Star,
@@ -237,7 +234,7 @@ function App() {
             <CodeMirror
               value={inputCode}
               height="450px"
-              theme={vscodeDark}
+              theme={dracula}
               extensions={[StreamLanguage.define(lua)]}
               onChange={(value) => setInputCode(value)}
               basicSetup={{
@@ -284,7 +281,7 @@ function App() {
             <CodeMirror
               value={outputCode}
               height={stats ? "380px" : "450px"}
-              theme={vscodeDark}
+              theme={dracula}
               extensions={[StreamLanguage.define(lua)]}
               readOnly={true}
               basicSetup={{
