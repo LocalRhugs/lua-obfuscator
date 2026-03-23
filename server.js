@@ -59,8 +59,7 @@ app.post('/obfuscate', async (req, res) => {
 });
 
 // ─── Custom VM Engine (real bytecode compilation) ───
-const { Lexer } = require('./vm-engine/lexer');
-const { Parser } = require('./vm-engine/parser');
+const luaparse = require('luaparse');
 const { Compiler } = require('./vm-engine/compiler');
 const { generate } = require('./vm-engine/generator');
 
@@ -74,13 +73,8 @@ app.post('/obfuscate-vm', async (req, res) => {
     }
     const startTime = Date.now();
     try {
-        // 1. Lex: source → tokens
-        const lexer = new Lexer(code);
-        const tokens = lexer.tokenize();
-
-        // 2. Parse: tokens → AST
-        const parser = new Parser(tokens);
-        const ast = parser.parseBlock();
+        // 1 & 2. Parse source → AST using luaparse
+        const ast = luaparse.parse(code);
 
         // 3. Compile: AST → bytecode with custom instruction set
         const compiler = new Compiler();

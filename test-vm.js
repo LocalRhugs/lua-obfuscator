@@ -1,5 +1,4 @@
-const {Lexer} = require('./vm-engine/lexer');
-const {Parser} = require('./vm-engine/parser');
+const luaparse = require('luaparse');
 const {Compiler} = require('./vm-engine/compiler');
 const {generate} = require('./vm-engine/generator');
 
@@ -16,8 +15,7 @@ for i = 1, 5 do
 end`;
 
 try {
-  const tokens = new Lexer(code).tokenize();
-  const ast = new Parser(tokens).parseBlock();
+  const ast = luaparse.parse(code);
   const compiled = new Compiler().compile(ast);
   const output = generate(compiled, 'Heavy');
 
