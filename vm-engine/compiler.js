@@ -346,7 +346,9 @@ class Compiler {
     const cSlot = func.addLocal('(control)');
     const vSlots = node.variables.map(v => func.addLocal(v.name));
 
-    for (const ex of node.iterators) this.compileExpression(func, ex);
+    for (let i = 0; i < node.iterators.length; i++) {
+        this.compileExpression(func, node.iterators[i], (i === node.iterators.length - 1) ? 3 : 1);
+    }
     // Generic multi-ret handle (simplistic)
     func.emitOp16(OPCODES.SET_LOCAL, cSlot);
     func.emitOp16(OPCODES.SET_LOCAL, sSlot);

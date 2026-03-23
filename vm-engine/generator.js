@@ -185,13 +185,6 @@ function generate(compiled, strength = 'Medium') {
   for (let i = midDead; i < dead.length; i++) lines.push(dead[i]);
   lines.push('');
 
-  lines.push(`local ${V.stack}={}`);
-  lines.push(`local ${V.sp}=0`);
-  lines.push(`local function ${V.push}(${V.val}) ${V.sp}=${V.sp}+1 ${V.stack}[${V.sp}]=${V.val} end`);
-  lines.push(`local function ${V.pop}() local ${V.val}=${V.stack}[${V.sp}] ${V.stack}[${V.sp}]=nil ${V.sp}=${V.sp}-1 return ${V.val} end`);
-  lines.push(`local function ${V.peek}() return ${V.stack}[${V.sp}] end`);
-  lines.push('');
-
   // Improved Globals: Proxy to _G but prioritize VM globals.
   // We also add a basic getfenv/setfenv simulation for Roblox scripts.
   lines.push(`local ${V.globals}`);
@@ -225,18 +218,36 @@ function generate(compiled, strength = 'Medium') {
     OP[name] = val;
   }
 
-  lines.push(`local function ${V.exec}(${V.idx},${V.args},${V.upvals})`);
-  lines.push(`  local ${V.fn}=${V.bcData}[${V.idx}]`);
-  lines.push(`  local ${V.bc}=${V.fn}.code`);
-  lines.push(`  local ${V.consts}=${V.fn}.consts`);
-  lines.push(`  local ${V.locals}={}`);
-  lines.push(`  local ${V.pc}=1`);
-  lines.push(`  local ${V.last_results} = {}`);
-  lines.push(`  local ${V.vargs} = {}`);
-  lines.push(`  if ${V.args} then`);
-  lines.push(`    for ${V.i}=1,${V.fn}.nparams do ${V.locals}[${V.i}-1]={v=${V.args}[${V.i}]} end`);
-  lines.push(`    for ${V.i}=${V.fn}.nparams+1,#${V.args} do ${V.vargs}[#${V.vargs}+1]=${V.args}[${V.i}] end`);
-  lines.push(`  end`);
+  lines.push(`local function ${V.exec}(${V.idx}, ${V.args}, ${V.upvals})
+  local ${V.fn} = ${V.bcData}[${V.idx}]
+  local ${V.bc} = ${V.fn}.code
+  local ${V.consts} = ${V.fn}.consts
+  local ${V.locals} = {}
+  local ${V.stack} = {}
+  local ${V.sp} = 0
+  local function ${V.push}(${V.val})
+    ${V.sp} = ${V.sp} + 1
+    ${V.stack}[${V.sp}] = ${V.val}
+  end
+  local function ${V.pop}()
+    local ${V.val} = ${V.stack}[${V.sp}]
+    ${V.stack}[${V.sp}] = nil
+    ${V.sp} = ${V.sp} - 1
+    return ${V.val}
+  end
+  local function ${V.peek}() return ${V.stack}[${V.sp}] end
+
+  local ${V.pc} = 1
+  local ${V.last_results} = {}
+  local ${V.vargs} = {}
+  if ${V.args} then
+    for ${V.i} = 1, ${V.fn}.nparams do
+      ${V.locals}[${V.i}-1] = {v = ${V.args}[${V.i}]}
+    end
+    for ${V.i} = ${V.fn}.nparams + 1, #${V.args} do
+      ${V.vargs}[#${V.vargs} + 1] = ${V.args}[${V.i}]
+    end
+  end`);
   lines.push(`  while ${V.pc}<=#${V.bc} do`);
   lines.push(`    local ${V.op}=${V.bc}[${V.pc}]`);
   lines.push(`    ${V.pc}=${V.pc}+1`);
@@ -354,12 +365,22 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`      local ${V.nuv}=${V.bc}[${V.pc}]`);
   lines.push(`      ${V.pc}=${V.pc}+1`);
   lines.push(`      local ${V.uvs}={}`);
-  lines.push(`      for ${V.i}=1,${V.nuv} do`);
-  lines.push(`        local ${V.isL}=${V.bc}[${V.pc}]`);
-  lines.push(`        local ${V.uvIdx}=${V.bc}[${V.pc}+1]*256+${V.bc}[${V.pc}+2]`);
-  lines.push(`        ${V.pc}=${V.pc}+3`);
-  lines.push(`        if ${V.isL}==1 then ${V.uvs}[${V.i}]=${V.locals}[${V.uvIdx}] else ${V.uvs}[${V.i}]=${V.upvals}[${V.uvIdx}+1] end`);
-  lines.push(`      end`);
+  lines.push(`      for ${V.i}=1,${V.nuv} do
+        local ${V.isL}=${V.bc}[${V.pc}]
+        local ${V.uvIdx}=${V.bc}[${V.pc}+1]*256+${V.bc}[${V.pc}+2]
+        ${V.pc}=${V.pc}+3
+        local uv
+        if ${V.isL}==1 then
+          uv = ${V.locals}[${V.uvIdx}]
+          if not uv then
+            uv = {v=nil}
+            ${V.locals}[${V.uvIdx}] = uv
+          end
+        else
+          uv = ${V.upvals}[${V.uvIdx}+1]
+        end
+        ${V.uvs}[${V.i}] = uv
+      end`);
   lines.push(`      local ${V.shared_exec}=${V.exec}`);
   lines.push(`      ${V.push}(function(...) return ${V.shared_exec}(${V.idx}+1, {...}, ${V.uvs}) end)`);
   lines.push(`    elseif ${V.op}==${OP.POP} then ${V.pop}()`);
