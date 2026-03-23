@@ -13,6 +13,7 @@
   "dependencies": {
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "luaparse": "^0.3.1"
+    "luaparse": "^0.3.1",
+    "wasmoon": "^1.16.0"
   }
 }
