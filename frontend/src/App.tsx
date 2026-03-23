@@ -1,3 +1,4 @@
+// Astra Obfuscator - Vercel Fixes
 import { useState, useCallback } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { StreamLanguage } from '@codemirror/language';
