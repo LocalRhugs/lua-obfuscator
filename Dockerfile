@@ -13,7 +13,7 @@ COPY package*.json ./
 RUN npm install
 
 # Copy application code
-COPY server.js ./
+COPY . .
 
 # Set environment variables
 ENV PROMETHEUS_DIR=/app/Prometheus
