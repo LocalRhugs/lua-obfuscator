@@ -58,7 +58,9 @@ app.post('/obfuscate', async (req, res) => {
     }
 });
 
-// ─── Custom VM Engine (real bytecode compilation via LuaJIT) ───
+// ─── Custom VM Engine (luaparse + Custom VM) ───
+const luaparse = require('luaparse');
+const { Compiler } = require('./vm-engine/compiler');
 const { generate } = require('./vm-engine/generator');
 
 app.post('/obfuscate-vm', async (req, res) => {
@@ -69,56 +71,36 @@ app.post('/obfuscate-vm', async (req, res) => {
     if (!['Light', 'Medium', 'Heavy'].includes(strength)) {
         return res.status(400).json({ error: 'Strength must be Light, Medium, or Heavy.' });
     }
-
-    const fileId = crypto.randomUUID();
-    const tempInFile = path.join(os.tmpdir(), `vm_in_${fileId}.lua`);
-    const tempOutFile = path.join(os.tmpdir(), `vm_out_${fileId}.bc`);
     const startTime = Date.now();
-
     try {
-        // 1. Write source code to temporary file
-        await fs.writeFile(tempInFile, code, 'utf-8');
+        // 1 & 2. Parse source → AST using luaparse
+        const ast = luaparse.parse(code);
 
-        // 2. Compile to LuaJIT bytecode using child_process
-        // On Windows locally, we use the luajit.exe in root if present, or the system one.
-        // On Railway (Linux Docker), it will use the globally installed luajit.
-        const LUAJIT_CMD = process.platform === 'win32' ? path.join(__dirname, 'luajit.exe') : 'luajit';
-        const command = `"${LUAJIT_CMD}" -b "${tempInFile}" "${tempOutFile}"`;
+        // 3. Compile: AST → bytecode with custom instruction set
+        const compiler = new Compiler();
+        const compiled = compiler.compile(ast);
 
-        exec(command, async (error, stdout, stderr) => {
-            if (error) {
-                console.error('LuaJIT Compilation failed:', stderr || error.message);
-                return res.status(500).json({ error: 'VM compilation failed.', details: stderr || error.message });
-            }
+        // 4. Generate: bytecode → encrypted Lua VM (no load/loadstring, no plaintext)
+        const vmOutput = generate(compiled, strength);
 
-            try {
-                // 3. Read the compiled bytecode as a Buffer
-                const bytecode = await fs.readFile(tempOutFile);
+        const timeTaken = (Date.now() - startTime) / 1000;
+        const originalSize = Buffer.byteLength(code, 'utf8');
+        const obfuscatedSize = Buffer.byteLength(vmOutput, 'utf8');
 
-                // 4. Generate the encrypted wrapper
-                const vmOutput = generate(bytecode, strength);
+        // Count total bytecode instructions
+        let totalOpcodes = 0;
+        for (const f of compiled.functions) totalOpcodes += f.code.length;
 
-                const timeTaken = (Date.now() - startTime) / 1000;
-                const originalSize = Buffer.byteLength(code, 'utf8');
-                const obfuscatedSize = Buffer.byteLength(vmOutput, 'utf8');
-
-                res.json({
-                    output: vmOutput,
-                    stats: {
-                        originalSize, obfuscatedSize,
-                        compressionRatio: `${((obfuscatedSize / originalSize) * 100).toFixed(2)}%`,
-                        timeTaken: `${timeTaken.toFixed(2)}s`,
-                        engine: 'Astra VM (LuaJIT Binary)',
-                        keyLength: strength === 'Light' ? 16 : strength === 'Medium' ? 32 : 64,
-                        bytecodeSize: bytecode.length,
-                    }
-                });
-
-                // 5. Cleanup
-                await fs.unlink(tempInFile).catch(() => {});
-                await fs.unlink(tempOutFile).catch(() => {});
-            } catch (innerErr) {
-                res.status(500).json({ error: 'Failed to process VM output.', details: innerErr.message });
+        res.json({
+            output: vmOutput,
+            stats: {
+                originalSize, obfuscatedSize,
+                compressionRatio: `${((obfuscatedSize / originalSize) * 100).toFixed(2)}%`,
+                timeTaken: `${timeTaken.toFixed(2)}s`,
+                engine: 'Astra VM (luaparse)',
+                keyLength: strength === 'Light' ? 16 : strength === 'Medium' ? 32 : 64,
+                bytecodeSize: totalOpcodes,
+                functionsCompiled: compiled.functions.length,
             }
         });
     } catch (err) {
