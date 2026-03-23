@@ -215,6 +215,8 @@ function generate(compiled, strength = 'Medium') {
     'select','unpack','rawget','rawset','rawequal','rawlen',
     'setmetatable','getmetatable','next','pairs','ipairs',
     'string','table','math','io','os','coroutine','bit32','bit',
+    'game','workspace','script','Instance','Vector3','Vector2','CFrame','Color3',
+    'UDim2','Enum','Ray','Region3','TweenInfo','BrickColor','wait','spawn','delay','tick','time','warn',
   ];
   for (const b of builtins) {
     lines.push(`  ["${b}"]=${b},`);
