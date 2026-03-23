@@ -5,13 +5,15 @@ import './index.css'
 import Layout from './Layout'
 import PrometheusPage from './pages/PrometheusPage'
 import CustomVMPage from './pages/CustomVMPage'
+import Home from './pages/Home'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route index element={<PrometheusPage />} />
+          <Route index element={<Home />} />
+          <Route path="/prometheus" element={<PrometheusPage />} />
           <Route path="/custom" element={<CustomVMPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

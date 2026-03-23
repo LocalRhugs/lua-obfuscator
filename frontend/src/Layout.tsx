@@ -16,12 +16,14 @@ export default function Layout() {
   return (
     <div className="app-container">
       <header className="header">
-        <div className="logo-container">
-          <div className="logo-icon">
-            <Zap size={24} color="white" />
+        <NavLink to="/" className="logo-link">
+          <div className="logo-container">
+            <div className="logo-icon">
+              <Zap size={24} color="white" />
+            </div>
+            <h1 className="logo-text">Astra Obfuscator</h1>
           </div>
-          <h1 className="logo-text">Astra Obfuscator</h1>
-        </div>
+        </NavLink>
         <div className="header-links">
           <button className="icon-btn" onClick={() => window.open('https://github.com/prometheus-lua/Prometheus', '_blank')}>
             <Github size={18} />
@@ -29,55 +31,58 @@ export default function Layout() {
         </div>
       </header>
 
-      {/* Engine Navigation Bar */}
-      <nav className="engine-nav">
-        <NavLink
-          to="/"
-          end
-          className={({ isActive }) => `engine-nav-btn ${isActive ? 'active' : ''}`}
-        >
-          <motion.div
-            className="engine-nav-inner"
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-          >
-            <div className="engine-nav-icon prometheus-icon">
-              <Flame size={20} />
-            </div>
-            <div className="engine-nav-text">
-              <span className="engine-nav-title">Prometheus Engine</span>
-              <span className="engine-nav-desc">AST-level obfuscation via Prometheus</span>
-            </div>
-          </motion.div>
-        </NavLink>
+      {/* Engine Navigation Bar — Only show on engine pages */}
+      {location.pathname !== '/' && (
+        <>
+          <nav className="engine-nav">
+            <NavLink
+              to="/prometheus"
+              className={({ isActive }) => `engine-nav-btn ${isActive ? 'active' : ''}`}
+            >
+              <motion.div
+                className="engine-nav-inner"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                <div className="engine-nav-icon prometheus-icon">
+                  <Flame size={20} />
+                </div>
+                <div className="engine-nav-text">
+                  <span className="engine-nav-title">Prometheus Engine</span>
+                  <span className="engine-nav-desc">AST-level obfuscation via Prometheus</span>
+                </div>
+              </motion.div>
+            </NavLink>
 
-        <NavLink
-          to="/custom"
-          className={({ isActive }) => `engine-nav-btn ${isActive ? 'active' : ''}`}
-        >
-          <motion.div
-            className="engine-nav-inner"
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-          >
-            <div className="engine-nav-icon vm-icon">
-              <Cpu size={20} />
-            </div>
-            <div className="engine-nav-text">
-              <span className="engine-nav-title">Custom VM Engine</span>
-              <span className="engine-nav-desc">XOR-encrypted bytecode virtual machine</span>
-            </div>
-          </motion.div>
-        </NavLink>
-      </nav>
+            <NavLink
+              to="/custom"
+              className={({ isActive }) => `engine-nav-btn ${isActive ? 'active' : ''}`}
+            >
+              <motion.div
+                className="engine-nav-inner"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                <div className="engine-nav-icon vm-icon">
+                  <Cpu size={20} />
+                </div>
+                <div className="engine-nav-text">
+                  <span className="engine-nav-title">Custom VM Engine</span>
+                  <span className="engine-nav-desc">XOR-encrypted bytecode virtual machine</span>
+                </div>
+              </motion.div>
+            </NavLink>
+          </nav>
 
-      {/* Active engine indicator */}
-      <div className="engine-indicator">
-        <div className={`indicator-dot ${location.pathname === '/custom' ? 'vm' : 'prometheus'}`} />
-        <span className="indicator-text">
-          Active: {location.pathname === '/custom' ? 'Custom VM Engine' : 'Prometheus Engine'}
-        </span>
-      </div>
+          {/* Active engine indicator */}
+          <div className="engine-indicator">
+            <div className={`indicator-dot ${location.pathname === '/custom' ? 'vm' : 'prometheus'}`} />
+            <span className="indicator-text">
+              Active: {location.pathname === '/custom' ? 'Custom VM Engine' : 'Prometheus Engine'}
+            </span>
+          </div>
+        </>
+      )}
 
       <main>
         <Outlet />
