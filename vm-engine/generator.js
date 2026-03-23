@@ -1,4 +1,4 @@
-const VM_VERSION = "2.2.6 (Self-Opcode & Robust Proxy)";
+const VM_VERSION = "2.2.7 (Self-Opcode Verified)";
 const VM_BUILD = new Date().toISOString().split('T')[0];
 
 function randName(len = 8) {
@@ -303,7 +303,16 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`    elseif ${V.op}==${OP.GET_TABLE} then`);
   lines.push(`      local ${V.kk}=${V.pop}()`);
   lines.push(`      local ${V.tbl}=${V.pop}()`);
+  lines.push(`      if ${V.tbl} == nil then error("Astra VM Error: Attempt to index nil with '" .. tostring(${V.kk}) .. "'") end`);
   lines.push(`      ${V.push}(${V.tbl}[${V.kk}])`);
+  lines.push(`    elseif ${V.op}==${OP.SELF} then`);
+  lines.push(`      local ${V.idx}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
+  lines.push(`      ${V.pc}=${V.pc}+2`);
+  lines.push(`      local ${V.kk}=${V.consts}[${V.idx}+1]`);
+  lines.push(`      local ${V.tbl}=${V.pop}()`);
+  lines.push(`      if ${V.tbl} == nil then error("Astra VM Error: Attempt to call method '" .. tostring(${V.kk}) .. "' on a nil value") end`);
+  lines.push(`      ${V.push}(${V.tbl}[${V.kk}])`);
+  lines.push(`      ${V.push}(${V.tbl})`);
   lines.push(`    elseif ${V.op}==${OP.SET_TABLE} then`);
   lines.push(`      local ${V.val}=${V.pop}()`);
   lines.push(`      local ${V.kk}=${V.pop}()`);
