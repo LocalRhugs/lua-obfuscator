@@ -5,6 +5,7 @@ const OPCODES = {
   LOAD_CONST: 0x01, LOAD_NIL: 0x02, LOAD_TRUE: 0x03, LOAD_FALSE: 0x04,
   GET_LOCAL: 0x05, SET_LOCAL: 0x06, GET_GLOBAL: 0x07, SET_GLOBAL: 0x08,
   GET_TABLE: 0x09, SET_TABLE: 0x0A, NEW_TABLE: 0x0B, SET_LIST: 0x0C,
+  GET_UPVAL: 0x0D, SET_UPVAL: 0x0E,
   ADD: 0x10, SUB: 0x11, MUL: 0x12, DIV: 0x13,
   MOD: 0x14, POW: 0x15, CONCAT: 0x16, UNM: 0x17,
   NOT: 0x18, LEN: 0x19,
@@ -18,7 +19,9 @@ const OPCODES = {
 };
 
 class FunctionPrototype {
-  constructor() {
+  constructor(parent = null) {
+    this.parent = parent;
+    this.upvalues = [];     // [{name, index, isLocal}]
     this.code = [];
     this.constants = [];
     this.constMap = new Map();
@@ -97,6 +100,40 @@ class Compiler {
     for (const stmt of body) {
       this.compileStatement(func, stmt);
     }
+  }
+
+  resolveVar(func, name) {
+    const slot = func.resolveLocal(name);
+    if (slot !== -1) return { type: 'local', slot };
+
+    const uvIdx = this.resolveUpvalue(func, name);
+    if (uvIdx !== -1) return { type: 'upvalue', index: uvIdx };
+
+    return { type: 'global' };
+  }
+
+  resolveUpvalue(func, name) {
+    if (!func.parent) return -1;
+
+    for (let i = 0; i < func.upvalues.length; i++) {
+      if (func.upvalues[i].name === name) return i;
+    }
+
+    const slot = func.parent.resolveLocal(name);
+    if (slot !== -1) {
+      const idx = func.upvalues.length;
+      func.upvalues.push({ name, index: slot, isLocal: true });
+      return idx;
+    }
+
+    const parentUvIdx = this.resolveUpvalue(func.parent, name);
+    if (parentUvIdx !== -1) {
+      const idx = func.upvalues.length;
+      func.upvalues.push({ name, index: parentUvIdx, isLocal: false });
+      return idx;
+    }
+
+    return -1;
   }
 
   getDecodedValue(node) {
@@ -194,8 +231,9 @@ class Compiler {
     for (let i = vars.length - 1; i >= 0; i--) {
       const target = vars[i];
       if (target.type === 'Identifier') {
-        const slot = func.resolveLocal(target.name);
-        if (slot >= 0) func.emitOp16(OPCODES.SET_LOCAL, slot);
+        const v = this.resolveVar(func, target.name);
+        if (v.type === 'local') func.emitOp16(OPCODES.SET_LOCAL, v.slot);
+        else if (v.type === 'upvalue') func.emitOp16(OPCODES.SET_UPVAL, v.index);
         else func.emitOp16(OPCODES.SET_GLOBAL, func.addConstant(target.name));
       } else if (target.type === 'MemberExpression') {
         const tmpT = func.nextSlot++; // table
@@ -360,7 +398,7 @@ class Compiler {
   }
 
   compileFuncDecl(func, node) {
-    const child = new FunctionPrototype();
+    const child = new FunctionPrototype(func);
     child.numParams = node.parameters.length;
     for (const p of node.parameters) {
       if (p.type === 'VarargLiteral') child.addLocal('...');
@@ -374,6 +412,12 @@ class Compiler {
     child.emit(1);
 
     func.emitOp16(OPCODES.CLOSURE, idx);
+    func.emit(child.upvalues.length);
+    for (const uv of child.upvalues) {
+      func.emit(uv.isLocal ? 1 : 0);
+      func.emit16(uv.index);
+    }
+
     if (node.isLocal) {
       func.emitOp16(OPCODES.SET_LOCAL, func.addLocal(node.identifier.name));
     } else if (node.identifier) {
@@ -396,8 +440,9 @@ class Compiler {
     }
     parts.unshift(curr.name);
 
-    const slot = func.resolveLocal(parts[0]);
-    if (slot >= 0) func.emitOp16(OPCODES.GET_LOCAL, slot);
+    const v = this.resolveVar(func, parts[0]);
+    if (v.type === 'local') func.emitOp16(OPCODES.GET_LOCAL, v.slot);
+    else if (v.type === 'upvalue') func.emitOp16(OPCODES.GET_UPVAL, v.index);
     else func.emitOp16(OPCODES.GET_GLOBAL, func.addConstant(parts[0]));
 
     for (let i = 1; i < parts.length - 1; i++) {
@@ -455,8 +500,9 @@ class Compiler {
         func.emitOp(OPCODES.LOAD_NIL);
         return;
       case 'Identifier': {
-        const slot = func.resolveLocal(node.name);
-        if (slot >= 0) func.emitOp16(OPCODES.GET_LOCAL, slot);
+        const v = this.resolveVar(func, node.name);
+        if (v.type === 'local') func.emitOp16(OPCODES.GET_LOCAL, v.slot);
+        else if (v.type === 'upvalue') func.emitOp16(OPCODES.GET_UPVAL, v.index);
         else func.emitOp16(OPCODES.GET_GLOBAL, func.addConstant(node.name));
         return;
       }
@@ -479,7 +525,7 @@ class Compiler {
         return;
       case 'TableConstructorExpression': return this.compileTable(func, node);
       case 'FunctionDeclaration': // Function expression
-        const c = new FunctionPrototype();
+        const c = new FunctionPrototype(func);
         c.numParams = node.parameters.length;
         for (const p of node.parameters) c.addLocal(p.type === 'VarargLiteral' ? '...' : p.name);
         const fi = this.functions.length;
@@ -488,6 +534,11 @@ class Compiler {
         c.emitOp(OPCODES.LOAD_NIL);
         c.emit(OPCODES.RETURN); c.emit(1);
         func.emitOp16(OPCODES.CLOSURE, fi);
+        func.emit(c.upvalues.length);
+        for (const uv of c.upvalues) {
+          func.emit(uv.isLocal ? 1 : 0);
+          func.emit16(uv.index);
+        }
         return;
       case 'VarargLiteral':
         func.emitOp(OPCODES.GET_VARARG);

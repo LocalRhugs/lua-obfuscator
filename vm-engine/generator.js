@@ -104,7 +104,8 @@ function generate(compiled, strength = 'Medium') {
     'handlers','pc','bc','locals','nparams','args','op','a','b',
     'idx','val','tbl','kk','fn','nargs','nrets','callArgs','result',
     'frame','retVals','varSlot','limit','step','i','s','r','p',
-    'decBc','encConst','ct','cd','dec','str','j'];
+    'decBc','encConst','ct','cd','dec','str','j','upvals','nuv',
+    'uvs','isL','uvIdx','extra','vargs','last_results'];
   for (const n of names) V[n] = randName(6 + Math.floor(Math.random() * 6));
 
   const encodedFuncs = functions.map(f => {
@@ -200,7 +201,10 @@ function generate(compiled, strength = 'Medium') {
     'select','unpack','rawget','rawset','rawequal','rawlen',
     'setmetatable','getmetatable','next','pairs','ipairs',
     'string','table','math','io','os','coroutine','bit32','bit',
-    'getfenv', 'setfenv', '_G', '_VERSION', 'shared'
+    'getfenv', 'setfenv', '_G', '_VERSION', 'shared',
+    // Roblox Globals
+    'game', 'workspace', 'script', 'Instance', 'Vector3', 'Color3', 'CFrame', 
+    'UDim', 'UDim2', 'Rect', 'Ray', 'Enum', 'task', 'debug', 'utf8', 'warn', 'tick', 'time', 'delay', 'wait', 'spawn', 'elapsedTime'
   ];
   for (const b of builtins) {
     if (b === 'getfenv') {
@@ -213,7 +217,7 @@ function generate(compiled, strength = 'Medium') {
         lines.push(`    ["${b}"] = ${b},`);
     }
   }
-  lines.push(`}, {__index = _G})`);
+  lines.push(`}, {__index = getfenv(0)})`);
   lines.push('');
 
   const OP = {};
@@ -221,7 +225,7 @@ function generate(compiled, strength = 'Medium') {
     OP[name] = val;
   }
 
-  lines.push(`local function ${V.exec}(${V.idx},${V.args})`);
+  lines.push(`local function ${V.exec}(${V.idx},${V.args},${V.upvals})`);
   lines.push(`  local ${V.fn}=${V.bcData}[${V.idx}]`);
   lines.push(`  local ${V.bc}=${V.fn}.code`);
   lines.push(`  local ${V.consts}=${V.fn}.consts`);
@@ -230,7 +234,7 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`  local ${V.last_results} = {}`);
   lines.push(`  local ${V.vargs} = {}`);
   lines.push(`  if ${V.args} then`);
-  lines.push(`    for ${V.i}=1,${V.fn}.nparams do ${V.locals}[${V.i}-1]=${V.args}[${V.i}] end`);
+  lines.push(`    for ${V.i}=1,${V.fn}.nparams do ${V.locals}[${V.i}-1]={v=${V.args}[${V.i}]} end`);
   lines.push(`    for ${V.i}=${V.fn}.nparams+1,#${V.args} do ${V.vargs}[#${V.vargs}+1]=${V.args}[${V.i}] end`);
   lines.push(`  end`);
   lines.push(`  while ${V.pc}<=#${V.bc} do`);
@@ -249,11 +253,20 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`    elseif ${V.op}==${OP.GET_LOCAL} then`);
   lines.push(`      local ${V.idx}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
   lines.push(`      ${V.pc}=${V.pc}+2`);
-  lines.push(`      ${V.push}(${V.locals}[${V.idx}])`);
+  lines.push(`      ${V.push}(${V.locals}[${V.idx}] and ${V.locals}[${V.idx}].v)`);
   lines.push(`    elseif ${V.op}==${OP.SET_LOCAL} then`);
   lines.push(`      local ${V.idx}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
   lines.push(`      ${V.pc}=${V.pc}+2`);
-  lines.push(`      ${V.locals}[${V.idx}]=${V.pop}()`);
+  lines.push(`      local ${V.val}=${V.pop}()`);
+  lines.push(`      if ${V.locals}[${V.idx}] then ${V.locals}[${V.idx}].v=${V.val} else ${V.locals}[${V.idx}]={v=${V.val}} end`);
+  lines.push(`    elseif ${V.op}==${OP.GET_UPVAL} then`);
+  lines.push(`      local ${V.idx}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
+  lines.push(`      ${V.pc}=${V.pc}+2`);
+  lines.push(`      ${V.push}(${V.upvals}[${V.idx}+1].v)`);
+  lines.push(`    elseif ${V.op}==${OP.SET_UPVAL} then`);
+  lines.push(`      local ${V.idx}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
+  lines.push(`      ${V.pc}=${V.pc}+2`);
+  lines.push(`      ${V.upvals}[${V.idx}+1].v=${V.pop}()`);
   lines.push(`    elseif ${V.op}==${OP.GET_GLOBAL} then`);
   lines.push(`      local ${V.idx}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
   lines.push(`      ${V.pc}=${V.pc}+2`);
@@ -338,8 +351,17 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`    elseif ${V.op}==${OP.CLOSURE} then`);
   lines.push(`      local ${V.idx}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
   lines.push(`      ${V.pc}=${V.pc}+2`);
-  lines.push(`      local ${V.shared_exec} = ${V.exec}`);
-  lines.push(`      ${V.push}(function(...) return ${V.shared_exec}(${V.idx}+1, {...}) end)`);
+  lines.push(`      local ${V.nuv}=${V.bc}[${V.pc}]`);
+  lines.push(`      ${V.pc}=${V.pc}+1`);
+  lines.push(`      local ${V.uvs}={}`);
+  lines.push(`      for ${V.i}=1,${V.nuv} do`);
+  lines.push(`        local ${V.isL}=${V.bc}[${V.pc}]`);
+  lines.push(`        local ${V.uvIdx}=${V.bc}[${V.pc}+1]*256+${V.bc}[${V.pc}+2]`);
+  lines.push(`        ${V.pc}=${V.pc}+3`);
+  lines.push(`        if ${V.isL}==1 then ${V.uvs}[${V.i}]=${V.locals}[${V.uvIdx}] else ${V.uvs}[${V.i}]=${V.upvals}[${V.uvIdx}+1] end`);
+  lines.push(`      end`);
+  lines.push(`      local ${V.shared_exec}=${V.exec}`);
+  lines.push(`      ${V.push}(function(...) return ${V.shared_exec}(${V.idx}+1, {...}, ${V.uvs}) end)`);
   lines.push(`    elseif ${V.op}==${OP.POP} then ${V.pop}()`);
   lines.push(`    elseif ${V.op}==${OP.DUP} then ${V.push}(${V.peek}())`);
   lines.push(`    elseif ${V.op}==${OP.SET_LIST} then ${V.pc}=${V.pc}+2`);
@@ -348,19 +370,19 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`      ${V.pc}=${V.pc}+2`);
   lines.push(`      local ${V.varSlot}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
   lines.push(`      ${V.pc}=${V.pc}+2`);
-  lines.push(`      local ${V.i}=${V.locals}[${V.varSlot}]`);
-  lines.push(`      local ${V.limit}=${V.locals}[${V.varSlot}+1]`);
-  lines.push(`      local ${V.step}=${V.locals}[${V.varSlot}+2]`);
+  lines.push(`      local ${V.i}=${V.locals}[${V.varSlot}].v`);
+  lines.push(`      local ${V.limit}=${V.locals}[${V.varSlot}+1].v`);
+  lines.push(`      local ${V.step}=${V.locals}[${V.varSlot}+2].v`);
   lines.push(`      if (${V.step}>0 and ${V.i}>${V.limit}) or (${V.step}<0 and ${V.i}<${V.limit}) then ${V.pc}=${V.idx}+1 end`);
   lines.push(`    elseif ${V.op}==${OP.FOR_LOOP} then`);
   lines.push(`      local ${V.idx}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
   lines.push(`      ${V.pc}=${V.pc}+2`);
   lines.push(`      local ${V.varSlot}=${V.bc}[${V.pc}]*256+${V.bc}[${V.pc}+1]`);
   lines.push(`      ${V.pc}=${V.pc}+2`);
-  lines.push(`      ${V.locals}[${V.varSlot}]=${V.locals}[${V.varSlot}]+${V.locals}[${V.varSlot}+2]`);
-  lines.push(`      local ${V.i}=${V.locals}[${V.varSlot}]`);
-  lines.push(`      local ${V.limit}=${V.locals}[${V.varSlot}+1]`);
-  lines.push(`      local ${V.step}=${V.locals}[${V.varSlot}+2]`);
+  lines.push(`      ${V.locals}[${V.varSlot}].v=${V.locals}[${V.varSlot}].v+${V.locals}[${V.varSlot}+2].v`);
+  lines.push(`      local ${V.i}=${V.locals}[${V.varSlot}].v`);
+  lines.push(`      local ${V.limit}=${V.locals}[${V.varSlot}+1].v`);
+  lines.push(`      local ${V.step}=${V.locals}[${V.varSlot}+2].v`);
   lines.push(`      if (${V.step}>0 and ${V.i}<=${V.limit}) or (${V.step}<0 and ${V.i}>=${V.limit}) then ${V.pc}=${V.idx}+1 end`);
   lines.push(`    elseif ${V.op}==${OP.GET_VARARG} then`);
   lines.push(`      local ${V.nrets}=${V.bc}[${V.pc}]`);
@@ -376,7 +398,7 @@ function generate(compiled, strength = 'Medium') {
   lines.push(`end`);
   lines.push('');
 
-  lines.push(`${V.exec}(1,{})`);
+  lines.push(`${V.exec}(1,{},{})`);
 
   return lines.join('\n');
 }
