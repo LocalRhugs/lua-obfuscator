@@ -16,24 +16,37 @@ app.use(express.json());
 const PROMETHEUS_DIR = process.env.PROMETHEUS_DIR || path.join(__dirname, 'Prometheus');
 
 app.post('/obfuscate', async (req, res) => {
-    const { code } = req.body;
+    const { code, strength = 'Medium' } = req.body;
 
     if (!code || typeof code !== 'string') {
         return res.status(400).json({ error: 'Code is required and must be a string.' });
     }
 
+    // Map user strength to Prometheus presets
+    const strengthMap = {
+        'Light': 'Weak',
+        'Medium': 'Medium',
+        'Heavy': 'Strong'
+    };
+    const preset = strengthMap[strength] || 'Medium';
+
     const fileId = crypto.randomUUID();
     const tempInFile = path.join(os.tmpdir(), `in_${fileId}.lua`);
     const tempOutFile = path.join(os.tmpdir(), `out_${fileId}.lua`);
+
+    const startTime = Date.now();
 
     try {
         await fs.writeFile(tempInFile, code, 'utf-8');
 
         // Use LUA_CMD environment variable or default to Windows path
         const LUA_CMD = process.env.LUA_CMD || '"C:\\Program Files (x86)\\Lua\\5.1\\lua.exe"';
-        const command = `${LUA_CMD} cli.lua --preset Medium --out "${tempOutFile}" "${tempInFile}"`;
+        const command = `${LUA_CMD} cli.lua --preset ${preset} --out "${tempOutFile}" "${tempInFile}"`;
         
         exec(command, { cwd: PROMETHEUS_DIR }, async (error, stdout, stderr) => {
+            const endTime = Date.now();
+            const timeTaken = (endTime - startTime) / 1000; // in seconds
+
             if (error) {
                 console.error(`exec error: ${error}`);
                 console.error(`stderr: ${stderr}`);
@@ -42,7 +55,20 @@ app.post('/obfuscate', async (req, res) => {
 
             try {
                 const obfuscatedCode = await fs.readFile(tempOutFile, 'utf-8');
-                res.json({ output: obfuscatedCode });
+                
+                const originalSize = Buffer.byteLength(code, 'utf8');
+                const obfuscatedSize = Buffer.byteLength(obfuscatedCode, 'utf8');
+                const compressionRatio = ((obfuscatedSize / originalSize) * 100).toFixed(2);
+
+                res.json({ 
+                    output: obfuscatedCode,
+                    stats: {
+                        originalSize,
+                        obfuscatedSize,
+                        compressionRatio: `${compressionRatio}%`,
+                        timeTaken: `${timeTaken.toFixed(2)}s`
+                    }
+                });
                 
                 // Cleanup files
                 await fs.unlink(tempInFile).catch(console.error);
