@@ -1,4 +1,4 @@
-const VM_VERSION = "2.2.4 (Performance & Async Fix)";
+const VM_VERSION = "2.2.5 (Core Bytecode Stability Fix)";
 const VM_BUILD = new Date().toISOString().split('T')[0];
 
 function randName(len = 8) {
@@ -47,10 +47,15 @@ function remapBytecode(funcProto, originalOpcodes, newOpcodes) {
 
     switch (name) {
       case 'LOAD_CONST': case 'GET_LOCAL': case 'SET_LOCAL':
-      case 'GET_GLOBAL': case 'SET_GLOBAL': case 'CLOSURE':
+      case 'GET_GLOBAL': case 'SET_GLOBAL':
+      case 'GET_UPVAL': case 'SET_UPVAL':
       case 'JMP': case 'JMP_FALSE': case 'JMP_TRUE':
       case 'SET_LIST':
         pc += 3; break;
+      case 'CLOSURE':
+        const nuv = code[pc + 3];
+        pc += 4 + nuv * 3;
+        break;
       case 'CALL': pc += 4; break;
       case 'RETURN': pc += 2; break;
       case 'FOR_PREP': case 'FOR_LOOP':
@@ -197,6 +202,7 @@ function generate(compiled, strength = 'Medium') {
     'getfenv', 'setfenv', '_G', '_VERSION', 'shared',
     // Roblox Globals
     'game', 'workspace', 'script', 'Instance', 'Vector3', 'Color3', 'CFrame', 
+    'Players', 'RunService', 'Teams', 'Debris', 'UserInputService',
     'UDim', 'UDim2', 'Rect', 'Ray', 'Enum', 'task', 'debug', 'utf8', 'warn', 'tick', 'time', 'delay', 'wait', 'spawn', 'elapsedTime'
   ];
   for (const b of builtins) {
