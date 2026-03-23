@@ -1,6 +1,5 @@
-// Astra VM Engine — Generator
-// Takes compiled bytecode + opcodes —> encrypted Lua VM that executes directly
-// Source code NEVER exists in plaintext. No load() or loadstring() is ever called.
+const VM_VERSION = "2.2.4 (Performance & Async Fix)";
+const VM_BUILD = new Date().toISOString().split('T')[0];
 
 function randName(len = 8) {
   const c = '_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -121,8 +120,9 @@ function generate(compiled, strength = 'Medium') {
 
   const lines = [];
   lines.push(`-- Astra Obfuscator | Custom VM Engine (Reverted & Fixed)`);
-  lines.push(`-- Protected with bytecode virtual machine`);
-  lines.push(`-- Strength: ${strength} | ${new Date().toISOString()}`);
+  lines.push(`-- Protected with bytecode virtual machine (v${VM_VERSION})`);
+  lines.push(`-- Build Date: ${VM_BUILD}`);
+  lines.push(`-- Protection Strength: ${strength} | Security Level: ${strength === 'Heavy' ? 'Maximum' : 'Standard'}`);
   lines.push('');
 
   for (let i = 0; i < midDead; i++) lines.push(dead[i]);
