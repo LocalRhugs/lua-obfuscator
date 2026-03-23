@@ -1,4 +1,4 @@
-const VM_VERSION = "2.2.5 (Core Bytecode Stability Fix)";
+const VM_VERSION = "2.2.6 (Self-Opcode & Robust Proxy)";
 const VM_BUILD = new Date().toISOString().split('T')[0];
 
 function randName(len = 8) {
@@ -49,6 +49,7 @@ function remapBytecode(funcProto, originalOpcodes, newOpcodes) {
       case 'LOAD_CONST': case 'GET_LOCAL': case 'SET_LOCAL':
       case 'GET_GLOBAL': case 'SET_GLOBAL':
       case 'GET_UPVAL': case 'SET_UPVAL':
+      case 'SELF':
       case 'JMP': case 'JMP_FALSE': case 'JMP_TRUE':
       case 'SET_LIST':
         pc += 3; break;
@@ -216,7 +217,13 @@ function generate(compiled, strength = 'Medium') {
         lines.push(`    ["${b}"] = ${b},`);
     }
   }
-  lines.push(`}, {__index = getfenv(0)})`);
+  lines.push(`}, {
+    __index = function(t, k)
+        local success, val = pcall(function() return getfenv(0)[k] end)
+        if success then return val end
+        return _G[k]
+    end
+})`);
   lines.push('');
 
   const OP = {};

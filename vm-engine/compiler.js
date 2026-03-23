@@ -12,6 +12,7 @@ const OPCODES = {
   EQ: 0x20, NEQ: 0x21, LT: 0x22, GT: 0x23, LE: 0x24, GE: 0x25,
   JMP: 0x30, JMP_FALSE: 0x31, JMP_TRUE: 0x32,
   CALL: 0x40, RETURN: 0x41, CLOSURE: 0x42,
+  SELF: 0x43,
   POP: 0x50, DUP: 0x51,
   FOR_PREP: 0x60, FOR_LOOP: 0x61,
   GET_VARARG: 0x70,
@@ -568,14 +569,7 @@ class Compiler {
   compileCall(func, node, nrets) {
     if (node.base.type === 'MemberExpression' && node.base.indexer === ':') {
       this.compileExpression(func, node.base.base, 1);
-      func.emitOp(OPCODES.DUP);
-      func.emitOp16(OPCODES.LOAD_CONST, func.addConstant(node.base.identifier.name));
-      func.emitOp(OPCODES.GET_TABLE);
-      const tf = func.nextSlot++, ts = func.nextSlot++;
-      func.emitOp16(OPCODES.SET_LOCAL, tf);
-      func.emitOp16(OPCODES.SET_LOCAL, ts);
-      func.emitOp16(OPCODES.GET_LOCAL, tf);
-      func.emitOp16(OPCODES.GET_LOCAL, ts);
+      func.emitOp16(OPCODES.SELF, func.addConstant(node.base.identifier.name));
       
       const args = node.arguments;
       for (let i = 0; i < args.length - 1; i++) this.compileExpression(func, args[i], 1);
