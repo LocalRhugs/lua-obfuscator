@@ -97,10 +97,19 @@ app.post('/obfuscate-vm', async (req, res) => {
                 originalSize, obfuscatedSize,
                 compressionRatio: `${((obfuscatedSize / originalSize) * 100).toFixed(2)}%`,
                 timeTaken: `${timeTaken.toFixed(2)}s`,
-                engine: 'Astra VM (luaparse)',
+                engine: 'Astra VM v3.0 (Hardened)',
                 keyLength: strength === 'Light' ? 16 : strength === 'Medium' ? 32 : 64,
+                keyFragments: strength === 'Light' ? 2 : strength === 'Medium' ? 3 : 5,
                 bytecodeSize: totalOpcodes,
                 functionsCompiled: compiled.functions.length,
+                security: {
+                    multiLayerKey: true,
+                    dispatchTable: true,
+                    antiTamper: true,
+                    lazyDecrypt: true,
+                    opcodeShuffling: true,
+                    bytecodeChunking: true,
+                }
             }
         });
     } catch (err) {
