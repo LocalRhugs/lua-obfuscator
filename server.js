@@ -73,8 +73,9 @@ app.post('/obfuscate-vm', async (req, res) => {
     }
     const startTime = Date.now();
     try {
-        // 1 & 2. Parse source → AST using luaparse
-        const ast = luaparse.parse(code);
+        // 1 & 2. Pre-process Luau 'continue' keywords and Parse source → AST using luaparse
+        const processedCode = code.replace(/\bcontinue\b/g, '__AstraContinue__()');
+        const ast = luaparse.parse(processedCode);
 
         // 3. Compile: AST → bytecode with custom instruction set
         const compiler = new Compiler();
