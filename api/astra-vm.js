@@ -23,7 +23,9 @@ module.exports = async (req, res) => {
 
     try {
         const startTime = Date.now();
-        const ast = luaparse.parse(code);
+        // Pre-process Luau 'continue' keywords into function calls our VM compiler can hook
+        const processedCode = code.replace(/\bcontinue\b/g, '__AstraContinue__()');
+        const ast = luaparse.parse(processedCode);
         const compiler = new Compiler();
         const compiled = compiler.compile(ast);
         const vmOutput = generate(compiled, strength);

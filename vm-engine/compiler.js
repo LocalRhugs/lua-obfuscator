@@ -31,6 +31,7 @@ class FunctionPrototype {
     this.scopeDepth = 0;
     this.nextSlot = 0;
     this.breakJumps = [];   // Stack of arrays for nested loops
+    this.continueJumps = [];// Stack of arrays for nested loop continues
   }
 
   emit(op) { this.code.push(op); return this.code.length - 1; }
@@ -171,6 +172,9 @@ class Compiler {
       case 'ReturnStatement': return this.compileReturn(func, node);
       case 'BreakStatement': return this.compileBreak(func, node);
       case 'CallStatement':
+        if (node.expression.base && node.expression.base.name === '__AstraContinue__') {
+          return this.compileContinue(func);
+        }
         this.compileExpression(func, node.expression, 0);
         return;
     }
@@ -295,12 +299,17 @@ class Compiler {
 
   compileWhile(func, node) {
     func.breakJumps.push([]);
+    func.continueJumps.push([]);
     const start = func.currentPos();
     this.compileExpression(func, node.condition);
     const exit = func.emitOp16(OPCODES.JMP_FALSE, 0);
     func.pushScope();
     this.compileBlock(func, node.body);
     func.popScope();
+
+    const continues = func.continueJumps.pop();
+    for (const c of continues) func.patch16(c, func.currentPos());
+
     func.emitOp16(OPCODES.JMP, start);
     func.patch16(exit, func.currentPos());
     const breaks = func.breakJumps.pop();
@@ -310,6 +319,7 @@ class Compiler {
   compileNumericFor(func, node) {
     func.pushScope();
     func.breakJumps.push([]);
+    func.continueJumps.push([]);
     const vSlot = func.addLocal(node.variable.name);
     const lSlot = func.addLocal('(limit)');
     const sSlot = func.addLocal('(step)');
@@ -329,6 +339,9 @@ class Compiler {
     this.compileBlock(func, node.body);
     func.popScope();
 
+    const continues = func.continueJumps.pop();
+    for (const c of continues) func.patch16(c, func.currentPos());
+
     const loop = func.emitOp16(OPCODES.FOR_LOOP, 0);
     func.emit16(vSlot);
     func.patch16(loop, body);
@@ -342,6 +355,7 @@ class Compiler {
   compileGenericFor(func, node) {
     func.pushScope();
     func.breakJumps.push([]);
+    func.continueJumps.push([]);
     const iSlot = func.addLocal('(iter)');
     const sSlot = func.addLocal('(state)');
     const cSlot = func.addLocal('(control)');
@@ -374,6 +388,10 @@ class Compiler {
     func.pushScope();
     this.compileBlock(func, node.body);
     func.popScope();
+
+    const continues = func.continueJumps.pop();
+    for (const c of continues) func.patch16(c, func.currentPos());
+
     func.emitOp16(OPCODES.JMP, top);
     func.patch16(exit, func.currentPos());
 
@@ -384,9 +402,14 @@ class Compiler {
 
   compileRepeat(func, node) {
     func.breakJumps.push([]);
+    func.continueJumps.push([]);
     const start = func.currentPos();
     func.pushScope();
     this.compileBlock(func, node.body);
+    
+    const continues = func.continueJumps.pop();
+    for (const c of continues) func.patch16(c, func.currentPos());
+
     this.compileExpression(func, node.condition);
     func.popScope();
     func.emitOp16(OPCODES.JMP_FALSE, start);
@@ -398,6 +421,12 @@ class Compiler {
     if (func.breakJumps.length === 0) throw new Error('break outside loop');
     const j = func.emitOp16(OPCODES.JMP, 0);
     func.breakJumps[func.breakJumps.length - 1].push(j);
+  }
+
+  compileContinue(func) {
+    if (func.continueJumps.length === 0) throw new Error('continue outside loop');
+    const j = func.emitOp16(OPCODES.JMP, 0);
+    func.continueJumps[func.continueJumps.length - 1].push(j);
   }
 
   compileFuncDecl(func, node) {
