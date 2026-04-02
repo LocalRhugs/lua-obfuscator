@@ -73,8 +73,10 @@ app.post('/obfuscate-vm', async (req, res) => {
     }
     const startTime = Date.now();
     try {
-        // 1 & 2. Pre-process Luau 'continue' keywords and Parse source → AST using luaparse
-        const processedCode = code.replace(/\bcontinue\b/g, '__AstraContinue__()');
+        // 1 & 2. Pre-process Luau 'continue' keywords and compound assignments, then Parse source → AST using luaparse
+        const processedCode = code
+            .replace(/\bcontinue\b/g, '__AstraContinue__()')
+            .replace(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\[["']?[a-zA-Z0-9_]+["']?\])*)\s*(\+|-|\*|\/|%|\^|\.\.)=\s*([^;\n]+?)(?=\s*(?:--|;|\n|$))/g, '$1 = $1 $2 ($3)');
         const ast = luaparse.parse(processedCode);
 
         // 3. Compile: AST → bytecode with custom instruction set
@@ -114,6 +116,12 @@ app.post('/obfuscate-vm', async (req, res) => {
             }
         });
     } catch (err) {
+        // --- DEBUG LOGGING ---
+        try {
+            require('fs').writeFileSync(require('path').join(require('os').tmpdir(), 'failed-script.lua'), code);
+            require('fs').writeFileSync(require('path').join(require('os').tmpdir(), 'failed-error.txt'), err.stack || err.toString());
+        } catch(e) {}
+        // ---------------------
         console.error('VM Obfuscation error:', err);
         res.status(500).json({
             error: 'VM obfuscation failed.',

@@ -23,8 +23,10 @@ module.exports = async (req, res) => {
 
     try {
         const startTime = Date.now();
-        // Pre-process Luau 'continue' keywords into function calls our VM compiler can hook
-        const processedCode = code.replace(/\bcontinue\b/g, '__AstraContinue__()');
+        // Pre-process Luau 'continue' keywords into function calls
+        const processedCode = code
+            .replace(/\bcontinue\b/g, '__AstraContinue__()')
+            .replace(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\[["']?[a-zA-Z0-9_]+["']?\])*)\s*(\+|-|\*|\/|%|\^|\.\.)=\s*([^;\n]+?)(?=\s*(?:--|;|\n|$))/g, '$1 = $1 $2 ($3)');
         const ast = luaparse.parse(processedCode);
         const compiler = new Compiler();
         const compiled = compiler.compile(ast);
