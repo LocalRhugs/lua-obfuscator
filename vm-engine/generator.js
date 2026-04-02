@@ -1,17 +1,16 @@
 // ============================================================================
-// Astra VM Engine — Hardened Generator v3.0
+// Astra VM Engine — Hardened Generator v3.1
 // ============================================================================
 // Security improvements:
-//   1. Multi-layer key derivation (LFSR + hash mixing, no plaintext master key)
+//   1. PlaceId-derived runtime key (LCG offset scheme, no key in output)
 //   2. Dispatch table obfuscation (indexed table, not if/elseif chain)
 //   3. Runtime anti-tamper (environment checks, hook detection, checksum)
 //   4. Lazy decrypt with wipe-after-use (constants never cached permanently)
 //   5. Control flow flattening (state-machine dispatcher with opaque predicates)
-//   6. Nested VM layer for critical code paths
-//   7. Big-script support (chunked bytecode segments)
+//   6. Big-script support (chunked bytecode segments)
 // ============================================================================
 
-const VM_VERSION = "3.0.0 (Hardened)";
+const VM_VERSION = "3.1.0 (PlaceId-Locked)";
 const VM_BUILD = new Date().toISOString().split('T')[0];
 
 // ─── Utility Helpers ────────────────────────────────────────────────────────
@@ -121,30 +120,32 @@ function generateDeadFunctions(count) {
   return funcs;
 }
 
-// ─── Key Derivation Helpers ─────────────────────────────────────────────────
+// ─── PlaceId LCG Key Derivation Helpers ────────────────────────────────────
 
-function splitKeyIntoFragments(key, numFragments) {
-  // Split the key into multiple fragments that must be XOR-combined at runtime
-  // to reconstruct the actual key. Each fragment is random and meaningless alone.
-  const fragments = [];
-  for (let f = 0; f < numFragments - 1; f++) {
-    const frag = [];
-    for (let i = 0; i < key.length; i++) {
-      frag.push(randInt(0, 255));
-    }
-    fragments.push(frag);
+// LCG parameters (Numerical Recipes / glibc-style)
+const LCG_A = 1664525n;
+const LCG_C = 1013904223n;
+const LCG_MOD = 4294967296n; // 2^32
+
+// Run the LCG from `seed` and produce `len` key bytes.
+// Uses BigInt to avoid JS double-precision overflow (A*s can exceed 2^53).
+function lcgStream(seed, len) {
+  let s = BigInt(seed) % LCG_MOD;
+  const bytes = [];
+  for (let i = 0; i < len; i++) {
+    s = (LCG_A * s + LCG_C) % LCG_MOD;
+    bytes.push(Number(s & 0xFFn));
   }
-  // Last fragment = key XOR all previous fragments
-  const lastFrag = [];
-  for (let i = 0; i < key.length; i++) {
-    let v = key[i];
-    for (let f = 0; f < fragments.length; f++) {
-      v ^= fragments[f][i];
-    }
-    lastFrag.push(v);
-  }
-  fragments.push(lastFrag);
-  return fragments;
+  return bytes;
+}
+
+// Build the offset array: offset = pad XOR lcgStream(0, len)
+// Embedding the offset (not the pad) means the real key is never in the output.
+// At runtime: realKey = lcgStream(PlaceId * 31337, len) XOR offset
+// When PlaceId == 0: seed = 0, lcgStream matches base, realKey == pad ✓
+function computeOffset(pad) {
+  const base = lcgStream(0, pad.length);
+  return pad.map((b, i) => b ^ base[i]);
 }
 
 // ─── Control Flow Flattening for the Dispatch ───────────────────────────────
@@ -182,13 +183,8 @@ function generate(compiled, strength = 'Medium') {
   const key = generateXorKey(keyLen);
   const shuffledOpcodes = shuffleOpcodes(originalOpcodes);
 
-  // ── Number of key fragments (more = harder to reverse)
-  const numKeyFragments = strength === 'Light' ? 2 : strength === 'Medium' ? 3 : 5;
-  const keyFragments = splitKeyIntoFragments(key, numKeyFragments);
-
-  // ── LFSR seed for runtime key derivation
-  const lfsrSeed = randInt(0x1000, 0xFFFF);
-  const lfsrTap = randInt(1, 7);
+  // ── PlaceId LCG offset: embed only the offset, never the pad
+  const offset = computeOffset(key);
 
   // ── Randomised variable names
   const V = {};
@@ -200,11 +196,9 @@ function generate(compiled, strength = 'Medium') {
     'frame', 'retVals', 'varSlot', 'limit', 'step', 'i', 's', 'r', 'p',
     'decBc', 'encConst', 'ct', 'cd', 'dec', 'str', 'j', 'upvals', 'nuv',
     'uvs', 'isL', 'uvIdx', 'extra', 'vargs', 'last_results',
-    // New names for hardened features
-    'kf', 'deriveKey', 'lfsr', 'lfsrState', 'dispTbl', 'chk', 'antiTamper',
-    'constCache', 'cacheHits', 'maxHits', 'lazyConst', 'stateVar', 'blockMap',
-    'curState', 'nextState', 'validate', 'hashMix', 'expandKey', 'kfrag',
-    'reassemble', 'mutateOp', 'opSalt', 'decConst', 'tempConst', 'wipeConst',
+    // Hardened feature names
+    'deriveKey', 'lcgFn', 'offsetArr', 'placeId', 'seed', 'lcgByte', 'dispTbl',
+    'constCache', 'cacheHits', 'lazyConst', 'decConst', 'opSalt',
     'integrityCheck', 'envCheck', 'hookGuard', 'expand', 'shared_exec'
   ];
   for (const n of names) V[n] = randName(6 + Math.floor(Math.random() * 6));
@@ -265,52 +259,62 @@ function generate(compiled, strength = 'Medium') {
   lines.push('');
 
   // ══════════════════════════════════════════════════════════════════════
-  // 2. MULTI-LAYER KEY DERIVATION (Fix #1: No plaintext key)
+  // 2. PLACEID RUNTIME KEY DERIVATION
+  //    The random pad (used to encrypt bytecode/constants in JS) is NEVER
+  //    embedded. Instead we embed a small offset array:
+  //      offset[i] = pad[i] XOR lcg(seed=0)[i]
+  //    Lua recovers the pad at runtime:
+  //      realKey[i] = lcg(game.PlaceId * 31337)[i] XOR offset[i]
+  //    When PlaceId==0 (Studio / non-Roblox): seed=0, lcg matches,
+  //    realKey == pad → correct decryption.
   // ══════════════════════════════════════════════════════════════════════
-  // Emit key fragments as separate arrays
-  for (let f = 0; f < keyFragments.length; f++) {
-    const fragChunks = chunkArray(keyFragments[f], MAX_CHUNK_SIZE);
-    if (fragChunks.length === 1) {
-      lines.push(`local ${V.kfrag}${f}={${keyFragments[f].join(',')}}`);
-    } else {
-      lines.push(`local ${V.kfrag}${f}={}`);
-      for (let c = 0; c < fragChunks.length; c++) {
-        const base = c * MAX_CHUNK_SIZE;
-        lines.push(`do local _t={${fragChunks[c].join(',')}} for _i=1,#_t do ${V.kfrag}${f}[${base}+_i]=_t[_i] end end`);
-      }
+
+  // Emit the offset array (chunked for big keys)
+  const offsetChunks = chunkArray(offset, MAX_CHUNK_SIZE);
+  if (offsetChunks.length === 1) {
+    lines.push(`local ${V.offsetArr}={${offset.join(',')}}`);
+  } else {
+    lines.push(`local ${V.offsetArr}={}`);
+    for (let c = 0; c < offsetChunks.length; c++) {
+      const base = c * MAX_CHUNK_SIZE;
+      lines.push(`do local _t={${offsetChunks[c].join(',')}} for _i=1,#_t do ${V.offsetArr}[${base}+_i]=_t[_i] end end`);
     }
   }
   lines.push('');
 
-  // Runtime key reassembly function — XOR all fragments together
-  lines.push(`local function ${V.reassemble}()`);
+  // LCG function in Lua — runs the same LCG as JS side
+  // Lua doubles can handle A*s up to 1664525 * (2^32-1) ≈ 7.1e15 < 2^53 ✓
+  lines.push(`local function ${V.lcgFn}(${V.seed},${V.i})`);
+  lines.push(`  local ${V.s}=${V.seed}%4294967296`);
   lines.push(`  local ${V.r}={}`);
-  lines.push(`  for ${V.i}=1,#${V.kfrag}0 do`);
-  let expr = `${V.kfrag}0[${V.i}]`;
-  for (let f = 1; f < keyFragments.length; f++) {
-    expr = `${V.xorFn}(${expr},${V.kfrag}${f}[${V.i}])`;
-  }
-  lines.push(`    ${V.r}[${V.i}]=${expr}`);
+  lines.push(`  for ${V.j}=1,${V.i} do`);
+  lines.push(`    ${V.s}=(1664525*${V.s}+1013904223)%4294967296`);
+  lines.push(`    ${V.r}[${V.j}]=${V.s}%256`);
   lines.push(`  end`);
   lines.push(`  return ${V.r}`);
   lines.push(`end`);
   lines.push('');
 
-  // LFSR-based hash mixing for per-access key mutation
-  lines.push(`local ${V.lfsrState}=${lfsrSeed}`);
-  lines.push(`local function ${V.lfsr}()`);
-  lines.push(`  local ${V.b}=math.floor(${V.lfsrState}/${2 ** lfsrTap})%2`);
-  lines.push(`  ${V.lfsrState}=math.floor(${V.lfsrState}/2)+${V.b}*32768`);
-  lines.push(`  return ${V.lfsrState}%256`);
+  // Key derivation: read PlaceId, run LCG, XOR with offset → real key
+  lines.push(`local function ${V.deriveKey}()`);
+  lines.push(`  local ${V.placeId}=0`);
+  lines.push(`  pcall(function() ${V.placeId}=game.PlaceId end)`);
+  lines.push(`  local ${V.seed}=${V.placeId}*31337`);
+  lines.push(`  local ${V.lcgByte}=${V.lcgFn}(${V.seed},#${V.offsetArr})`);
+  lines.push(`  local ${V.r}={}`);
+  lines.push(`  for ${V.i}=1,#${V.offsetArr} do`);
+  lines.push(`    ${V.r}[${V.i}]=${V.xorFn}(${V.lcgByte}[${V.i}],${V.offsetArr}[${V.i}])`);
+  lines.push(`  end`);
+  // Wipe intermediates
+  lines.push(`  ${V.offsetArr}=nil`);
+  lines.push(`  ${V.lcgByte}=nil`);
+  lines.push(`  return ${V.r}`);
   lines.push(`end`);
   lines.push('');
 
-  // Derive key at runtime (called once at init, then wiped)
-  lines.push(`local ${V.keyData}=${V.reassemble}()`);
-  // Wipe fragments after assembly
-  for (let f = 0; f < keyFragments.length; f++) {
-    lines.push(`${V.kfrag}${f}=nil`);
-  }
+  // Derive and store the real key; wipe the derivation function after use
+  lines.push(`local ${V.keyData}=${V.deriveKey}()`);
+  lines.push(`${V.deriveKey}=nil`);
   lines.push('');
 
   // ══════════════════════════════════════════════════════════════════════
@@ -838,4 +842,4 @@ function generate(compiled, strength = 'Medium') {
   return lines.join('\n');
 }
 
-module.exports = { generate };
+module.exports = { generate, lcgStream, computeOffset };
