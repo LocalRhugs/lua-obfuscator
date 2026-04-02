@@ -27,10 +27,14 @@ app.post('/obfuscate', async (req, res) => {
     const tempOutFile = path.join(os.tmpdir(), `out_${fileId}.lua`);
     const startTime = Date.now();
     try {
-        await fs.writeFile(tempInFile, code, 'utf-8');
+        // Pre-process Luau 'continue' keywords and compound assignments before saving for Prometheus
+        const processedCode = code
+            .replace(/\bcontinue\b/g, '__AstraContinue__()')
+            .replace(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\[["']?[a-zA-Z0-9_]+["']?\])*)\s*(\+|-|\*|\/|%|\^|\.\.)=\s*([^;\n]+?)(?=\s*(?:--|;|\n|$))/g, '$1 = $1 $2 ($3)');
+        await fs.writeFile(tempInFile, processedCode, 'utf-8');
         const LUA_CMD = process.env.LUA_CMD || '"C:\\Program Files (x86)\\Lua\\5.1\\lua.exe"';
         const command = `${LUA_CMD} cli.lua --preset ${preset} --out "${tempOutFile}" "${tempInFile}"`;
-        exec(command, { cwd: PROMETHEUS_DIR }, async (error, stdout, stderr) => {
+        exec(command, { cwd: PROMETHEUS_DIR, maxBuffer: 1024 * 1024 * 50 }, async (error, stdout, stderr) => {
             const timeTaken = (Date.now() - startTime) / 1000;
             if (error) {
                 return res.status(500).json({ error: 'Obfuscation failed.', details: stderr || error.message });
